@@ -22,6 +22,15 @@ var clientEntry = "src/main.js";
 var clientDest = "./build/client";
 var clientBundleTarget = "bundle.js";
 
+/** The array of things to copy over directly */
+var clientAssetGlobs = [
+	clientDir + "/**/*",
+	"!" + clientDir + "/src",
+	"!" + clientDir + "/src/**/*",
+	"!" + clientDir + "/style",
+	"!" + clientDir + "/style/**/*"
+];
+
 var serverDir = "./server";
 var serverEntry = "app.js";
 var serverDest = "./build/server";
@@ -82,7 +91,17 @@ gulp.task('client:sass:watch', function() {
 	gulp.watch([clientDir + '/style/**/*.scss', clientDir + '/style/**/*.sass'], ['client:sass']);
 });
 
-gulp.task('client:dev', ['client:watchify', 'client:sass', 'client:sass:watch']);
+gulp.task('client:copy-assets', function() {
+	// Copy everything apart from the src and style folders into the client build folder
+	gulp.src(clientAssetGlobs)
+		.pipe(gulp.dest(clientDest));
+});
+
+gulp.task('client:copy-assets:watch', function() {
+	gulp.watch(clientAssetGlobs, ['client:copy-assets']);
+});
+
+gulp.task('client:dev', ['client:watchify', 'client:sass', 'client:sass:watch', 'client:copy-assets', 'client:copy-assets:watch']);
 
 /* Server tasks */
 
@@ -101,27 +120,7 @@ gulp.task('server:babel', function(cb) {
 		.on("end", cb);
 });
 
-/**
- * Copy the public directory into the build folder
- */
-gulp.task('server:copy-public', function(cb) {
-	gulp.src(serverDir + "/public/**")
-		.pipe(copy(serverDest, { prefix: 1 }))
-		.on("end", cb);
-});
-
-/**
- * Watch for changes in the public folder and copy them if necessary
- */
-/*gulp.task('server:copy-public:watch', function() {
-	var sourceFolder = serverDir + "/public";
-	gulp.src(sourceFolder + "/!**!/!*", { base: sourceFolder })
-		.pipe(watch(sourceFolder, { base: sourceFolder }))
-		.pipe(gulp.dest(serverDest + "/public"))
-		.pipe(notify('Copied assets'));
-});*/
-
-gulp.task('server:run', ['server:babel'/*, 'server:copy-public'*/], function(cb) {
+gulp.task('server:run', ['server:babel'], function(cb) {
 	getServer().start();
 	cb();
 });
@@ -134,7 +133,7 @@ gulp.task('server:watch', ['server:run'], function() {
 	], ['server:run']);
 });
 
-gulp.task('server:dev', ['server:run', 'server:watch', 'server:copy-public:watch']);
+gulp.task('server:dev', ['server:run', 'server:watch']);
 
 /* Default task */
 
