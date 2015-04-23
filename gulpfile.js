@@ -1,82 +1,145 @@
 var gulp = require('gulp'),
-	notify = require('gulp-notify'),
-	source = require('vinyl-source-stream'),
-	sourcemaps = require('gulp-sourcemaps'),
-	browserify = require('browserify'),
-	exorcist = require('exorcist'),
-	watchify = require('watchify'),
-	babelify = require('babelify'),
-	uglify = require('gulp-uglify'),
-	streamify = require('gulp-streamify'),
-	less = require('gulp-less'),
-	connect = require('gulp-connect');
+    notify = require('gulp-notify'),
+    source = require('vinyl-source-stream'),
+    sourcemaps = require('gulp-sourcemaps'),
+    browserify = require('browserify'),
+    exorcist = require('exorcist'),
+    watchify = require('watchify'),
+    babelify = require('babelify'),
+    babel = require('gulp-babel'),
+    copy = require('gulp-copy'),
+    uglify = require('gulp-uglify'),
+    streamify = require('gulp-streamify'),
+    sass = require('gulp-sass'),
+    gls = require('gulp-live-server'),
+	watch = require('gulp-watch'),
+	_ = require('lodash');
 
-/*
-TODO: We need to specify chokidar polling in watchify on Windows (waiting for https://github.com/substack/watchify/pull/139 to be merged)
-*/
+var server;
 
-gulp.task('watch-js', function() {
-	var bundler = browserify({
-		debug: true, // Sourcemapping
+var clientDir = "./client";
+var clientEntry = "src/main.js";
+var clientDest = "./build/client";
+var clientBundleTarget = "bundle.js";
 
-		// watchify requires these options
-		cache: {}, packageCache: {}, fullPaths: true
-	})
-	.require(require.resolve('./lib/main.js'), { entry: true })
-	.transform(babelify.configure({
-		optional: ["runtime"]
-	}));
+var serverDir = "./server";
+var serverEntry = "app.js";
+var serverDest = "./build/server";
 
-	// The actual bundling process
+function timeTask(stream, taskFn) {
+	var start = Date.now();
+	taskFn(stream)
+		.pipe(notify('Built in ' + (Date.now() - start) + 'ms'));
+}
+
+function getBrowserifyBundler(useSourceMaps, useWatchify) {
+	var params = useWatchify ? _.assign({ debug: useSourceMaps }, watchify.args) : { debug: useSourceMaps };
+	var wrapper = useWatchify ? _.compose(watchify, browserify) : browserify;
+	return wrapper(params).require(require.resolve(clientDir + "/" + clientEntry), { entry: true });
+}
+
+// Use a closure to create a singleton server instance
+var getServer = function() {
+	var server = gls(serverDest + "/" + serverEntry);
+	return function() {
+		return server;
+	}
+}();
+
+/* Client tasks */
+
+gulp.task('client:watchify', function() {
+	var bundle = getBrowserifyBundler(true, true);
+
+	// The bundling process
 	var rebundle = function() {
 		var start = Date.now();
-		bundler.bundle()
-			.on("error", notify.onError(function (error) {
+		var stream = bundle
+			.bundle()
+			.on("error", notify.onError(function(error) {
 				return error.message;
 			}))
-			.pipe(exorcist('dist/js/index.js.map')) // for Safari
-			.pipe(source('main.js'))
-			.pipe(gulp.dest('dist/js'))
-			.pipe(connect.reload())
+			.pipe(exorcist(clientDest + '/js/index.js.map')) // for Safari
+			.pipe(source(clientBundleTarget))
+			.pipe(gulp.dest(clientDest + '/js'))
 			.pipe(notify('Built in ' + (Date.now() - start) + 'ms'));
 	};
 
-	// Add watchify
-	bundler = watchify(bundler);
-	bundler.on('update', rebundle);
+	bundle.on('update', rebundle);
 
 	return rebundle();
 });
 
-gulp.task('less', function() {
-	return gulp.src('style/**/*.less')
+gulp.task('client:sass', function() {
+	return gulp.src([clientDir + '/style/**/*.scss', clientDir + '/style/**/*.sass'])
 		.pipe(sourcemaps.init())
-		.pipe(less())
+		.pipe(sass())
 		.pipe(sourcemaps.write('.'))
-		.pipe(gulp.dest('dist/css'));
+		.pipe(gulp.dest(clientDest + "/css"));
 });
 
-gulp.task('watch-less', function() {
-	gulp.watch(['style/**/*.less'], ['less']);
+gulp.task('client:sass:watch', function() {
+	gulp.watch([clientDir + '/style/**/*.scss', clientDir + '/style/**/*.sass'], ['client:sass']);
 });
 
-gulp.task('server', function() {
-	connect.server({
-		livereload: true
-	});
-});
+gulp.task('client:dev', ['client:watchify', 'client:sass', 'client:sass:watch']);
 
-gulp.task('prod', function() {
-	var prodBundle = browserify({ debug: false })
-		.require(require.resolve('./lib/main.js'), { entry: true })
-		.transform(babelify.configure({
-			optional: ["runtime"]
+/* Server tasks */
+
+/**
+ * Transpile all javascript files in the server source directory into the build folder
+ */
+gulp.task('server:babel', function(cb) {
+	gulp.src([serverDir + "/**/*.js"])
+		.pipe(sourcemaps.init())
+		.pipe(babel({ optional: ["runtime"] }))
+		.on("error", notify.onError(function(error) {
+			return error.message;
 		}))
-		.bundle()
-		.pipe(source('main.js'))
-		.pipe(streamify(uglify()))
-		.pipe(gulp.dest('prod'))
-		.pipe(notify('Built LESS in ' + (Date.now() - start) + 'ms'));
+		.pipe(sourcemaps.write('.'))
+		.pipe(gulp.dest(serverDest))
+		.on("end", cb);
 });
 
-gulp.task('default', ['watch-js', 'less', 'watch-less', 'server']);
+/**
+ * Copy the public directory into the build folder
+ */
+gulp.task('server:copy-public', function(cb) {
+	gulp.src(serverDir + "/public/**")
+		.pipe(copy(serverDest, { prefix: 1 }))
+		.on("end", cb);
+});
+
+/**
+ * Watch for changes in the public folder and copy them if necessary
+ */
+/*gulp.task('server:copy-public:watch', function() {
+	var sourceFolder = serverDir + "/public";
+	gulp.src(sourceFolder + "/!**!/!*", { base: sourceFolder })
+		.pipe(watch(sourceFolder, { base: sourceFolder }))
+		.pipe(gulp.dest(serverDest + "/public"))
+		.pipe(notify('Copied assets'));
+});*/
+
+gulp.task('server:run', ['server:babel'/*, 'server:copy-public'*/], function(cb) {
+	getServer().start();
+	cb();
+});
+
+gulp.task('server:watch', ['server:run'], function() {
+	// Recompile and restart the server if any js file apart from anything in public changes
+	gulp.watch([
+		serverDir + "/**/*.js",
+		"!" + serverDir + "/public/**"
+	], ['server:run']);
+});
+
+gulp.task('server:dev', ['server:run', 'server:watch', 'server:copy-public:watch']);
+
+/* Default task */
+
+gulp.task('dev', ['client:dev', 'server:dev']);
+
+/* Default task */
+
+gulp.task('default', ['dev']);
